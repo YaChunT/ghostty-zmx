@@ -1302,7 +1302,7 @@ ghostty_zmx_cleanup_closed_remote_projections() {
 # (`--session <gzr>` marker) and signal handling is deterministic.
 ghostty_zmx_projection_command_string() {
   emulate -L zsh
-  local host="$1" workspace="$2" session="$3" prefix="$4" zmx_path="${5:-}" wrapper remote_zmx
+  local host="$1" workspace="$2" session="$3" prefix="$4" zmx_path="${5:-}" wrapper remote_zmx env_prefix
   wrapper="$(ghostty_zmx_wrapper_path)"
   # Use the absolute remote zmx path discovered by the prerequisite probe when
   # available. This preserves hosts where zmx is in ~/.local/bin without
@@ -1313,10 +1313,14 @@ ghostty_zmx_projection_command_string() {
   else
     remote_zmx="$(ghostty_zmx_remote_zmx_for_host "$host")"
   fi
+  env_prefix=""
+  if [[ -n "${PATH:-}" ]]; then
+    env_prefix="env PATH=${(q)PATH} "
+  fi
   # The `zmx attach <session>` substring is preserved for process-arg scanning
   # (find_live_projection), including when remote_zmx is an absolute path such
   # as /home/user/.local/bin/zmx.
-  print -r -- "$wrapper projection --host $host --workspace $workspace --session $session -- $prefix '$remote_zmx attach $session'"
+  print -r -- "${env_prefix}$wrapper projection --host $host --workspace $workspace --session $session -- $prefix '$remote_zmx attach $session'"
 }
 
 # Recreate the remote window/tab/split layout from the server remote-layout's

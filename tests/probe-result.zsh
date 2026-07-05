@@ -101,6 +101,7 @@ print -r -- $'gzmx-fixture\tssh\t0.6.1\tactive\tssh gzmx-fixture\t/home/gzmx/.lo
 _cmd="$(ghostty_zmx_projection_command_string gzmx-fixture ws sess 'ssh gzmx-fixture')"
 [[ "$_cmd" == *"/home/gzmx/.local/bin/zmx attach sess"* ]] || { print -u2 "projection command did not use remote zmx path: $_cmd"; exit 1 }
 [[ "$_cmd" != *"source ~/.zshrc"* ]] || { print -u2 "projection command still sources remote zshrc: $_cmd"; exit 1 }
+[[ "$_cmd" == env\ PATH=* ]] || { print -u2 "projection command did not carry local PATH for ssh ProxyCommand helpers: $_cmd"; exit 1 }
 print "ok: projection command uses remote zmx path"
 
 print "all probe-result tests passed"

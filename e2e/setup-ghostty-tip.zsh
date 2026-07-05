@@ -30,6 +30,7 @@ local tip_config_dir="${GZMX_E2E_GHOSTTY_TIP_CONFIG_DIR:-$HOME/.config/ghostty-t
 local tip_zdotdir="${GZMX_E2E_GHOSTTY_TIP_ZDOTDIR:-$HOME/.config/ghostty-tip-zdotdir}"
 local tip_data_home="${GZMX_E2E_GHOSTTY_TIP_DATA_HOME:-$HOME/.local/share/ghostty-zmx-tip}"
 local tip_state_home="${GZMX_E2E_GHOSTTY_TIP_STATE_HOME:-$HOME/.local/state/ghostty-zmx-tip}"
+local tip_path="${GZMX_E2E_GHOSTTY_TIP_PATH:-$HOME/.local/bin:$HOME/.toolbox/bin:/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin}"
 local tip_config="$tip_config_dir/config.ghostty"
 local tip_launcher="$tip_config_dir/open-ghostty-tip.zsh"
 local mount_dir=""
@@ -53,6 +54,7 @@ Environment:
   GZMX_E2E_GHOSTTY_TIP_ZDOTDIR    Isolated Ghostty-tip ZDOTDIR, default ~/.config/ghostty-tip-zdotdir
   GZMX_E2E_GHOSTTY_TIP_DATA_HOME  Isolated data dir, default ~/.local/share/ghostty-zmx-tip
   GZMX_E2E_GHOSTTY_TIP_STATE_HOME Isolated state dir, default ~/.local/state/ghostty-zmx-tip
+  GZMX_E2E_GHOSTTY_TIP_PATH       Spotlight/app-launch PATH for proxy commands
 
 If the target app already exists and no DMG/URL is provided, the script only
 ensures the copied app has the isolated Ghostty-tip identity and signature.
@@ -159,6 +161,7 @@ env = GHOSTTY_ZMX_AUTO_ATTACH=1
 env = GHOSTTY_ZMX_INSTALL_DIR=$install_dir
 env = GHOSTTY_ZMX_DATA_HOME=$tip_data_home
 env = GHOSTTY_ZMX_STATE_HOME=$tip_state_home
+env = PATH=$tip_path
 window-save-state = never
 confirm-close-surface = true
 EOF
@@ -245,7 +248,8 @@ configure_tip_bundle_environment() {
     GHOSTTY_ZMX_AUTO_ATTACH 1 \
     GHOSTTY_ZMX_INSTALL_DIR "$install_dir" \
     GHOSTTY_ZMX_DATA_HOME "$tip_data_home" \
-    GHOSTTY_ZMX_STATE_HOME "$tip_state_home"; do
+    GHOSTTY_ZMX_STATE_HOME "$tip_state_home" \
+    PATH "$tip_path"; do
     "$buddy" -c "Set :LSEnvironment:$key $value" "$plist" >/dev/null 2>&1 ||
       "$buddy" -c "Add :LSEnvironment:$key string $value" "$plist"
   done
