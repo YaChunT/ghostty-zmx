@@ -43,6 +43,36 @@ if [[ "${GZMX_E2E_CLEAN_ALL_LOCAL_ZMX:-0}" == "1" ]]; then
     [[ -n "$s" ]] || continue
     "$zmx_bin" kill "$s" >/dev/null 2>&1 || true
   done < <("$zmx_bin" list 2>/dev/null | sed -n 's/.*name=\([^	 ]*\).*/\1/p')
+  if command -v ps >/dev/null 2>&1; then
+    local -a zmx_pids
+    zmx_pids=("${(@f)$(ps -ax -o pid=,command= 2>/dev/null | awk '
+      {
+        pid=$1
+        line=$0
+        sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", line)
+      }
+      line == "zmx attach" || index(line, "zmx attach ") == 1 { print pid }
+    ')}")
+    (( ${#zmx_pids} > 0 )) && kill "${zmx_pids[@]}" >/dev/null 2>&1 || true
+    local -a zmx_ssh_pids
+    zmx_ssh_pids=("${(@f)$(ps -ax -o pid=,command= 2>/dev/null | awk '
+      {
+        pid=$1
+        line=$0
+        sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", line)
+      }
+      index(line, "/cm-zmx-") > 0 { print pid }
+    ')}")
+    (( ${#zmx_ssh_pids} > 0 )) && kill "${zmx_ssh_pids[@]}" >/dev/null 2>&1 || true
+  fi
+  local socket_dir
+  socket_dir="$("$zmx_bin" version 2>/dev/null | awk '$1 == "socket_dir" { print $2; exit }')"
+  if [[ "$socket_dir" == "${TMPDIR:-/tmp}"zmx-* || "$socket_dir" == "${TMPDIR:-/tmp}"/zmx-* || "$socket_dir" == /tmp/zmx-* ]]; then
+    rm -rf "$socket_dir" 2>/dev/null || true
+  fi
+  rm -f "$HOME"/.local/ssh/cm-zmx-*.socket(N) 2>/dev/null || true
+  rm -rf "$HOME/.local/share/ghostty-zmx-tip" "$HOME/.local/state/ghostty-zmx-tip" 2>/dev/null || true
+  mkdir -p "$HOME/.local/share/ghostty-zmx-tip" "$HOME/.local/state/ghostty-zmx-tip" 2>/dev/null || true
 fi
 
 if command -v ps >/dev/null 2>&1; then

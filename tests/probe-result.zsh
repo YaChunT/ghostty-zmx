@@ -43,6 +43,14 @@ run_probe "gzmx-fixture" "" 255
 [[ "$_probe_out" == $'\n'* ]] || { print -u2 "unreachable: missing leading newline: $_probe_out"; exit 1 }
 print "ok: unreachable → connection error"
 
+# --- Case 1b: probe timeout ---
+run_probe "gzmx-fixture" "" 124
+[[ "$_probe_rc" -ne 0 ]] || { print -u2 "timeout: expected non-zero exit, got $_probe_rc"; exit 1 }
+[[ "$_probe_out" == *"timed out probing gzmx-fixture over ssh"* ]] || { print -u2 "timeout: wrong message: $_probe_out"; exit 1 }
+[[ "$_probe_out" == *"ssh proxy/auth is ready"* ]] || { print -u2 "timeout: missing proxy/auth hint: $_probe_out"; exit 1 }
+[[ "$_probe_out" == $'\n'* ]] || { print -u2 "timeout: missing leading newline: $_probe_out"; exit 1 }
+print "ok: timeout → proxy/auth hint"
+
 # --- Case 2: zmx missing (no-zmx) ---
 run_probe "gzmx-fixture" "no-zmx" 0
 [[ "$_probe_rc" -ne 0 ]] || { print -u2 "no-zmx: expected non-zero exit, got $_probe_rc"; exit 1 }

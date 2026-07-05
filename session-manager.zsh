@@ -2106,6 +2106,10 @@ ghostty_zmx_probe_result() {
   emulate -L zsh
   local host="$1" probe_out="$2" probe_rc="$3" version_value
   if [[ "$probe_rc" -ne 0 ]]; then
+    if [[ "$probe_rc" -eq 124 ]]; then
+      print -P "\nghostty-zmx: timed out probing $host over ssh. Check that the host is reachable and your ssh proxy/auth is ready, then retry.\n"
+      return 1
+    fi
     print -P "\nghostty-zmx: could not reach $host (ssh exit $probe_rc). Is the host online and your ssh config/certs valid?\n"
     return 1
   fi
@@ -2298,21 +2302,7 @@ ghostty_zmx_accept_line() {
   # the cause was surviving orphaned poller shells. See changelog
   # 2026-07-01-v0-2-multiplication-root-cause-orphaned-poller-shells.)
   local -a probe_argv=()
-  local _have_t=0 _w _is_tsh=0
-  # Detect tsh transport: projection[1] may be bare `tsh` or an absolute
-  # path ending in `/tsh` (resolved by ghostty_zmx_resolve_transport_path).
-  # Use the shared basename helper so both forms are detected.
-  if ghostty_zmx_is_tsh_ssh "${projection[1]}" "${projection[2]:-}"; then
-    _is_tsh=1
-  fi
-  for _w in "${projection[@]}"; do
-    case "$_w" in
-      -t|-tt|--tty) ;;
-      -T) [[ "$_is_tsh" -eq 0 ]] && { probe_argv+=(-T); _have_t=1 } ;;
-      *) probe_argv+=("$_w") ;;
-    esac
-  done
-  [[ "$_is_tsh" -eq 1 || "$_have_t" -eq 1 ]] || probe_argv+=(-T)
+  probe_argv=(${(z)"$(ghostty_zmx_notty_prefix "$prefix_string")"})
   _gzmx_widget_debug "widget probe host=$host_key session=$session argv=${probe_argv[*]}"
   local probe_out probe_rc probe_msg version_value zmx_path
   # Source .zshrc so zmx is found even when it's only on the interactive PATH
@@ -2328,10 +2318,20 @@ ghostty_zmx_accept_line() {
   #
   # `ssh -T` writes its diagnostics to stderr; suppress it so it does not
   # clutter the pane.
-  probe_out="$("${probe_argv[@]}" 'source ~/.zshrc 2>/dev/null; if zmx_path=$(command -v zmx 2>/dev/null); then printf "zmx-path:%s\nzmx:%s\n" "$zmx_path" "$($zmx_path version | head -1)"; else echo no-zmx; fi; exit 0' 2>/dev/null)"
-  probe_rc=$?
+  local remote_probe='source ~/.zshrc 2>/dev/null; if zmx_path=$(command -v zmx 2>/dev/null); then printf "zmx-path:%s\nzmx:%s\n" "$zmx_path" "$($zmx_path version | head -1)"; else echo no-zmx; fi; exit 0'
+  local probe_timeout="${GHOSTTY_ZMX_PROBE_TIMEOUT:-15}"
+  [[ "$probe_timeout" =~ '^[0-9]+$' && "$probe_timeout" -gt 0 ]] || probe_timeout=15
+  if command -v perl >/dev/null 2>&1; then
+    probe_out="$(perl -e 'my $timeout = shift @ARGV; alarm $timeout; exec @ARGV' "$probe_timeout" "${probe_argv[@]}" "$remote_probe" 2>/dev/null)"
+    probe_rc=$?
+    [[ "$probe_rc" -eq 142 ]] && probe_rc=124
+  else
+    probe_out="$("${probe_argv[@]}" "$remote_probe" 2>/dev/null)"
+    probe_rc=$?
+  fi
   probe_msg="$(ghostty_zmx_probe_result "$host_key" "$probe_out" "$probe_rc")"
   if [[ $? -ne 0 ]]; then
+    _gzmx_widget_debug "widget probe-failed host=$host_key rc=$probe_rc"
     print -r -- "$probe_msg"
     _gzmx_widget_refresh_history
     BUFFER=""
