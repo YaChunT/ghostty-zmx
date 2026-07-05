@@ -23,8 +23,8 @@ fi
 # The shared lib only provides the probe; the v0.1 fallback remains in this
 # .zshrc entry point so the .zprofile early hook can fail open silently.
 if [[ "${TERM_PROGRAM:-}" == "ghostty" ]] && ! ghostty_zmx_has_tty_capability 2>/dev/null; then
-  [[ -r "$HOME/.config/ghostty-zmx/session-manager-v0.1.zsh" ]] &&
-    source "$HOME/.config/ghostty-zmx/session-manager-v0.1.zsh"
+  [[ -r "$_gzmx_manager_dir/session-manager-v0.1.zsh" ]] &&
+    source "$_gzmx_manager_dir/session-manager-v0.1.zsh"
   return 0
 fi
 

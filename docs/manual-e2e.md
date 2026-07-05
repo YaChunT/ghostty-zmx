@@ -16,6 +16,8 @@ Before testing, confirm the installed Ghostty config contains the managed produc
 
 The scripted E2E scenarios live under `e2e/` and should run against `Ghostty-tip`, not stable Ghostty. Stable Ghostty must not be replaced by Homebrew's `ghostty@tip` cask because that cask targets `/Applications/Ghostty.app`.
 
+The v0.2 SSH/projection scenarios require Ghostty 1.4.x AppleScript `tty`/`pid` support, which is currently available in Ghostty-tip but not stable Ghostty.
+
 Prepare an isolated app copy from an existing downloaded tip DMG:
 
 ```sh
@@ -38,6 +40,20 @@ If macOS asks for Accessibility permission, the dialog should name `Ghostty-tip`
 ```sh
 plutil -extract CFBundleName raw /Applications/Ghostty-tip.app/Contents/Info.plist
 plutil -extract CFBundleIdentifier raw /Applications/Ghostty-tip.app/Contents/Info.plist
+```
+
+For manual testing of the live checkout on Ghostty-tip only, install the dev copy with:
+
+```sh
+e2e/setup-ghostty-tip.zsh --install-live
+```
+
+This installs the checkout under `~/.config/ghostty-zmx-tip` by default, writes an isolated Ghostty-tip config under `~/.config/ghostty-tip`, and writes an isolated `ZDOTDIR` under `~/.config/ghostty-tip-zdotdir`. It does not edit stable Ghostty, stable Ghostty config, `~/.zshrc`, or `~/.zprofile`. The generated `ZDOTDIR` sources user dotfiles with `GHOSTTY_ZMX_AUTO_ATTACH=0` first, then sources the tip install so an existing stable/default ghostty-zmx install stays dormant.
+
+Launch the isolated live copy with:
+
+```sh
+~/.config/ghostty-tip/open-ghostty-tip.zsh
 ```
 
 Run all scenarios with the Docker sshd fixture:
