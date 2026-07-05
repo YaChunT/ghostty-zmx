@@ -16,6 +16,9 @@ setopt no_sh_word_split null_glob
 local ghostty_app="${GHOSTTY_APP_NAME:-Ghostty-tip}"
 local ghostty_bundle="/Applications/${ghostty_app}.app"
 local ghostty_bin="${GHOSTTY_BIN:-$ghostty_bundle/Contents/MacOS/ghostty}"
+if [[ ! -x "$ghostty_bin" && -x "$ghostty_bundle/Contents/MacOS/ghostty" ]]; then
+  ghostty_bin="$ghostty_bundle/Contents/MacOS/ghostty"
+fi
 local zmx_bin="${GZMX_E2E_LOCAL_ZMX:-zmx}"
 local tmpdirs=(/tmp/gzmx-e2e-*)
 local sessions=()
@@ -35,12 +38,24 @@ if (( ${#sessions} > 0 )); then
   done
 fi
 
+if [[ "${GZMX_E2E_CLEAN_ALL_LOCAL_ZMX:-0}" == "1" ]]; then
+  while IFS= read -r s; do
+    [[ -n "$s" ]] || continue
+    "$zmx_bin" kill "$s" >/dev/null 2>&1 || true
+  done < <("$zmx_bin" list 2>/dev/null | sed -n 's/.*name=\([^	 ]*\).*/\1/p')
+fi
+
 if command -v ps >/dev/null 2>&1; then
   local -a pids
   pids=("${(@f)$(ps -ax -o pid=,command= 2>/dev/null | awk -v bin="$ghostty_bin" '
-    $0 ~ bin { print $1; next }
-    $0 ~ /\/tmp\/gzmx-e2e-[^ ]*\/(data|state)/ { print $1; next }
-    $0 ~ /\/tmp\/gzmx-e2e-[^ ]*/ { print $1; next }
+    {
+      pid=$1
+      line=$0
+      sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", line)
+    }
+    line == bin || index(line, bin " ") == 1 { print pid; next }
+    line ~ /\/tmp\/gzmx-e2e-[^ ]*\/(data|state)/ { print pid; next }
+    line ~ /\/tmp\/gzmx-e2e-[^ ]*/ { print pid; next }
   ')}")
   if (( ${#pids} > 0 )); then
     kill "${pids[@]}" >/dev/null 2>&1 || true

@@ -29,6 +29,8 @@ GZMX_E2E_GHOSTTY_APP=${GHOSTTY_APP_NAME:-Ghostty-tip}
 GZMX_E2E_GHOSTTY_BUNDLE="/Applications/${GZMX_E2E_GHOSTTY_APP}.app"
 GZMX_E2E_GHOSTTY_BIN="${GHOSTTY_BIN:-$GZMX_E2E_GHOSTTY_BUNDLE/Contents/MacOS/$GZMX_E2E_GHOSTTY_APP}"
 GZMX_E2E_REPO_DIR="${0:A:h:h:h}"
+GZMX_E2E_INSTALL_DIR="${GZMX_E2E_GHOSTTY_ZMX_INSTALL_DIR:-${GHOSTTY_ZMX_INSTALL_DIR:-$HOME/.config/ghostty-zmx-tip}}"
+[[ -d "$GZMX_E2E_INSTALL_DIR" ]] || GZMX_E2E_INSTALL_DIR="$HOME/.config/ghostty-zmx"
 GZMX_E2E_FIXTURE_DIR="$GZMX_E2E_REPO_DIR/e2e/fixtures/sshd"
 GZMX_E2E_MOCK_TSH_DIR="$GZMX_E2E_REPO_DIR/e2e/fixtures/tsh-mock"
 GZMX_E2E_SSH_PORT=${GZMX_E2E_SSH_PORT:-2222}
@@ -95,11 +97,11 @@ gzmx_e2e_init() {
   GZMX_E2E_ZDOTDIR="$GZMX_E2E_TMPDIR/zdotdir"
   mkdir -p "$GZMX_E2E_DATA_HOME" "$GZMX_E2E_STATE_HOME" "$GZMX_E2E_ZDOTDIR"
   GZMX_E2E_SSHCONFIG="$GZMX_E2E_TMPDIR/sshconfig"
-  cat > "$GZMX_E2E_ZDOTDIR/.zprofile" <<'EOF'
-[[ -r "$HOME/.config/ghostty-zmx/session-manager-early.zsh" ]] && source "$HOME/.config/ghostty-zmx/session-manager-early.zsh"
+  cat > "$GZMX_E2E_ZDOTDIR/.zprofile" <<EOF
+[[ -r ${(qqq)GZMX_E2E_INSTALL_DIR}/session-manager-early.zsh ]] && source ${(qqq)GZMX_E2E_INSTALL_DIR}/session-manager-early.zsh
 EOF
-  cat > "$GZMX_E2E_ZDOTDIR/.zshrc" <<'EOF'
-[[ -r "$HOME/.config/ghostty-zmx/session-manager.zsh" ]] && source "$HOME/.config/ghostty-zmx/session-manager.zsh"
+  cat > "$GZMX_E2E_ZDOTDIR/.zshrc" <<EOF
+[[ -r ${(qqq)GZMX_E2E_INSTALL_DIR}/session-manager.zsh ]] && source ${(qqq)GZMX_E2E_INSTALL_DIR}/session-manager.zsh
 EOF
   gzmx_e2e_log "tmpdir=$GZMX_E2E_TMPDIR"
 }
@@ -172,7 +174,7 @@ gzmx_e2e_fixture_install_server() {
     gzmx_e2e_log "using existing server install on external fixture"
     return 0
   fi
-  local install_dir="$HOME/.config/ghostty-zmx"
+  local install_dir="$GZMX_E2E_INSTALL_DIR"
   [[ -d "$install_dir" ]] || gzmx_e2e_fail "laptop install missing; run ghostty-zmx install first"
   local tmpdir="/tmp/ghostty-zmx-server-install.e2e.$$"
   local -a remote_cmd=(
@@ -250,13 +252,14 @@ gzmx_e2e_ghostty_launch() {
   # If mock-tsh is enabled, prepend it to PATH so the widget finds our `tsh`.
   local _path_env="${PATH}"
   [[ "$GZMX_E2E_USE_MOCK_TSH" == "1" ]] && _path_env="$GZMX_E2E_MOCK_TSH_DIR:${PATH}"
-  open -na "$GZMX_E2E_GHOSTTY_BUNDLE" --args \
+  open -F -n -a "$GZMX_E2E_GHOSTTY_APP" --args \
     --config-default-files=false \
+    --env=GHOSTTY_ZMX_APP_NAME="$GZMX_E2E_GHOSTTY_APP" \
     --env=GHOSTTY_ZMX_AUTO_ATTACH=1 \
     --env=GHOSTTY_ZMX_DEBUG=1 \
     --env=GHOSTTY_ZMX_DATA_HOME="$GZMX_E2E_DATA_HOME" \
     --env=GHOSTTY_ZMX_STATE_HOME="$GZMX_E2E_STATE_HOME" \
-    --env=GHOSTTY_ZMX_INSTALL_DIR="$HOME/.config/ghostty-zmx" \
+    --env=GHOSTTY_ZMX_INSTALL_DIR="$GZMX_E2E_INSTALL_DIR" \
     --env=ZDOTDIR="$GZMX_E2E_ZDOTDIR" \
     --env=PATH="$_path_env" \
     --env=GHOSTTY_ZMX_E2E_SSH_CONFIG="$GZMX_E2E_SSHCONFIG" \

@@ -28,6 +28,8 @@ local repo_dir="${0:A:h:h}"
 local install_dir="${GZMX_E2E_GHOSTTY_TIP_INSTALL_DIR:-$HOME/.config/ghostty-zmx-tip}"
 local tip_config_dir="${GZMX_E2E_GHOSTTY_TIP_CONFIG_DIR:-$HOME/.config/ghostty-tip}"
 local tip_zdotdir="${GZMX_E2E_GHOSTTY_TIP_ZDOTDIR:-$HOME/.config/ghostty-tip-zdotdir}"
+local tip_data_home="${GZMX_E2E_GHOSTTY_TIP_DATA_HOME:-$HOME/.local/share/ghostty-zmx-tip}"
+local tip_state_home="${GZMX_E2E_GHOSTTY_TIP_STATE_HOME:-$HOME/.local/state/ghostty-zmx-tip}"
 local tip_config="$tip_config_dir/config.ghostty"
 local tip_launcher="$tip_config_dir/open-ghostty-tip.zsh"
 local mount_dir=""
@@ -49,6 +51,8 @@ Environment:
                                   Live ghostty-zmx install dir, default ~/.config/ghostty-zmx-tip
   GZMX_E2E_GHOSTTY_TIP_CONFIG_DIR Isolated Ghostty-tip config dir, default ~/.config/ghostty-tip
   GZMX_E2E_GHOSTTY_TIP_ZDOTDIR    Isolated Ghostty-tip ZDOTDIR, default ~/.config/ghostty-tip-zdotdir
+  GZMX_E2E_GHOSTTY_TIP_DATA_HOME  Isolated data dir, default ~/.local/share/ghostty-zmx-tip
+  GZMX_E2E_GHOSTTY_TIP_STATE_HOME Isolated state dir, default ~/.local/state/ghostty-zmx-tip
 
 If the target app already exists and no DMG/URL is provided, the script only
 ensures the copied app has the isolated Ghostty-tip identity and signature.
@@ -92,6 +96,14 @@ fi
   print -u2 "Refusing to use HOME as Ghostty-tip ZDOTDIR"
   exit 1
 }
+[[ "$tip_data_home" != "${XDG_DATA_HOME:-$HOME/.local/share}/ghostty-zmx" ]] || {
+  print -u2 "Refusing to use default/stable ghostty-zmx data dir for Ghostty-tip: $tip_data_home"
+  exit 1
+}
+[[ "$tip_state_home" != "${XDG_STATE_HOME:-$HOME/.local/state}/ghostty-zmx" ]] || {
+  print -u2 "Refusing to use default/stable ghostty-zmx state dir for Ghostty-tip: $tip_state_home"
+  exit 1
+}
 
 cleanup() {
   [[ -n "$mount_dir" && -d "$mount_dir" ]] && hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
@@ -118,7 +130,7 @@ install_live_files() {
     [[ -r "$repo_dir/$f" ]] || { print -u2 "Missing checkout file: $repo_dir/$f"; exit 1; }
   done
 
-  mkdir -p "$install_dir/terminfo" "$tip_config_dir" "$tip_zdotdir"
+  mkdir -p "$install_dir/terminfo" "$tip_config_dir" "$tip_zdotdir" "$tip_data_home" "$tip_state_home"
   install -m 0644 "$repo_dir/session-manager.zsh" "$install_dir/session-manager.zsh"
   install -m 0644 "$repo_dir/session-manager-lib.zsh" "$install_dir/session-manager-lib.zsh"
   install -m 0644 "$repo_dir/session-manager-early.zsh" "$install_dir/session-manager-early.zsh"
@@ -145,6 +157,8 @@ env = ZDOTDIR=$tip_zdotdir
 env = GHOSTTY_ZMX_APP_NAME=$app_name
 env = GHOSTTY_ZMX_AUTO_ATTACH=1
 env = GHOSTTY_ZMX_INSTALL_DIR=$install_dir
+env = GHOSTTY_ZMX_DATA_HOME=$tip_data_home
+env = GHOSTTY_ZMX_STATE_HOME=$tip_state_home
 window-save-state = never
 confirm-close-surface = true
 EOF
@@ -169,14 +183,22 @@ EOF
 # ghostty-tip isolated zshrc for ghostty-zmx
 typeset _gzmx_tip_saved_auto_attach="\${GHOSTTY_ZMX_AUTO_ATTACH-}"
 typeset -i _gzmx_tip_had_auto_attach="\${+GHOSTTY_ZMX_AUTO_ATTACH}"
+typeset _gzmx_tip_saved_p9k_instant="\${POWERLEVEL9K_INSTANT_PROMPT-}"
+typeset -i _gzmx_tip_had_p9k_instant="\${+POWERLEVEL9K_INSTANT_PROMPT}"
 export GHOSTTY_ZMX_AUTO_ATTACH=0
+export POWERLEVEL9K_INSTANT_PROMPT=off
 [[ -r "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
+if (( _gzmx_tip_had_p9k_instant )); then
+  export POWERLEVEL9K_INSTANT_PROMPT="\$_gzmx_tip_saved_p9k_instant"
+else
+  unset POWERLEVEL9K_INSTANT_PROMPT
+fi
 if (( _gzmx_tip_had_auto_attach )); then
   export GHOSTTY_ZMX_AUTO_ATTACH="\$_gzmx_tip_saved_auto_attach"
 else
   unset GHOSTTY_ZMX_AUTO_ATTACH
 fi
-unset _gzmx_tip_saved_auto_attach _gzmx_tip_had_auto_attach
+unset _gzmx_tip_saved_auto_attach _gzmx_tip_had_auto_attach _gzmx_tip_saved_p9k_instant _gzmx_tip_had_p9k_instant
 unset _GHOSTTY_ZMX_LIB_SOURCED
 [[ -r ${(qqq)install_dir}/session-manager.zsh ]] && source ${(qqq)install_dir}/session-manager.zsh
 EOF
@@ -193,12 +215,40 @@ EOF
   print "  install dir: $install_dir"
   print "  config:      $tip_config"
   print "  zdotdir:     $tip_zdotdir"
+  print "  data home:   $tip_data_home"
+  print "  state home:  $tip_state_home"
   print "  launcher:    $tip_launcher"
   print ""
   print "Launch with:"
   print "  $tip_launcher"
   print "or:"
   print "  open -F -n -a ${(q)app_name} --args --config-default-files=false --config-file=${(q)tip_config}"
+}
+
+configure_tip_bundle_environment() {
+  emulate -L zsh
+  setopt local_options no_sh_word_split
+
+  local plist="$target/Contents/Info.plist"
+  local buddy="/usr/libexec/PlistBuddy"
+  [[ -x "$buddy" ]] || { print -u2 "PlistBuddy not found"; exit 1; }
+
+  "$buddy" -c "Print :LSEnvironment" "$plist" >/dev/null 2>&1 ||
+    "$buddy" -c "Add :LSEnvironment dict" "$plist"
+  "$buddy" -c "Set :LSEnvironment:GHOSTTY_MAC_LAUNCH_SOURCE app" "$plist" >/dev/null 2>&1 ||
+    "$buddy" -c "Add :LSEnvironment:GHOSTTY_MAC_LAUNCH_SOURCE string app" "$plist"
+
+  local key value
+  for key value in \
+    ZDOTDIR "$tip_zdotdir" \
+    GHOSTTY_ZMX_APP_NAME "$app_name" \
+    GHOSTTY_ZMX_AUTO_ATTACH 1 \
+    GHOSTTY_ZMX_INSTALL_DIR "$install_dir" \
+    GHOSTTY_ZMX_DATA_HOME "$tip_data_home" \
+    GHOSTTY_ZMX_STATE_HOME "$tip_state_home"; do
+    "$buddy" -c "Set :LSEnvironment:$key $value" "$plist" >/dev/null 2>&1 ||
+      "$buddy" -c "Add :LSEnvironment:$key string $value" "$plist"
+  done
 }
 
 if [[ -n "$url" ]]; then
@@ -242,15 +292,30 @@ fi
 plutil -replace CFBundleName -string "$app_name" "$target/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "$app_name" "$target/Contents/Info.plist"
 plutil -replace CFBundleIdentifier -string "$bundle_id" "$target/Contents/Info.plist"
+[[ "$install_live" == "1" ]] && configure_tip_bundle_environment
 codesign --force --deep --sign - "$target" >/dev/null
+codesign --verify --deep --strict "$target" >/dev/null
+
+local actual_name actual_bundle_id
+actual_name="$(plutil -extract CFBundleName raw "$target/Contents/Info.plist")"
+actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$target/Contents/Info.plist")"
+[[ "$actual_name" == "$app_name" ]] || {
+  print -u2 "Ghostty-tip bundle name verification failed: expected $app_name, got $actual_name"
+  exit 1
+}
+[[ "$actual_bundle_id" == "$bundle_id" ]] || {
+  print -u2 "Ghostty-tip bundle id verification failed: expected $bundle_id, got $actual_bundle_id"
+  exit 1
+}
 
 local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 [[ -x "$lsregister" ]] && "$lsregister" -f "$target" >/dev/null 2>&1 || true
 
 print "Ghostty-tip E2E app ready:"
 print "  app:       $target"
-print "  name:      $(plutil -extract CFBundleName raw "$target/Contents/Info.plist")"
-print "  bundle id: $(plutil -extract CFBundleIdentifier raw "$target/Contents/Info.plist")"
+print "  name:      $actual_name"
+print "  bundle id: $actual_bundle_id"
+print "  signature: verified"
 
 if [[ "$install_live" == "1" ]]; then
   print ""
