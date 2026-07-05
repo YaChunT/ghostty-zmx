@@ -2342,32 +2342,15 @@ ghostty_zmx_accept_line() {
   zmx_path="$(ghostty_zmx_probe_zmx_path "$probe_out")"
   _gzmx_widget_debug "widget probe-ok host=$host_key version=$version_value zmx_path=${zmx_path:-zmx}"
 
-  # Open the projection window from THIS surface-shell (zle) context. The
-  # ghostty-zmx wrapper (the surface's own command) writes the remote-layout
-  # `state=present` row when it starts; the widget does not write the layout
-  # row. See changelog
-  # 2026-07-01-v0-2-multiplication-root-cause-orphaned-poller-shells.
-  local command_string applescript_command
-  command_string="$(ghostty_zmx_projection_command_string "$host_key" "$workspace" "$session" "$prefix_string" "$zmx_path")"
-  applescript_command="${command_string//\\\\/\\\\\\\\}"
-  applescript_command="${applescript_command//\"/\\\"}"
-  _gzmx_widget_debug "widget opening host=$host_key session=$session cmd=$command_string"
-  osascript <<OSA 2>/dev/null || true
-tell application "$_ghostty_app_name"
-  set cfg to new surface configuration
-  set command of cfg to "$applescript_command"
-  set w to new window with configuration cfg
-  activate window w
-end tell
-OSA
-  _gzmx_widget_debug "widget opened host=$host_key session=$session"
+  # Record host metadata before opening so pollers/reconcile paths can resolve
+  # the same transport and probed remote zmx path while the projection starts.
+  { awk -F '\t' -v h="$host_key" '$1 != h { print }' "$GHOSTTY_ZMX_DATA_HOME/remote-hosts" 2>/dev/null || true
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$host_key" "$transport" "$version_value" active "$prefix_string" "$zmx_path"
+  } > "$GHOSTTY_ZMX_DATA_HOME/remote-hosts.tmp.$$" 2>/dev/null && mv "$GHOSTTY_ZMX_DATA_HOME/remote-hosts.tmp.$$" "$GHOSTTY_ZMX_DATA_HOME/remote-hosts" 2>/dev/null
 
-  # Write a local `opening` projection row under the per-host+session lock so
-  # the poller knows a projection is in flight for this session and does not
-  # open a duplicate. The poller upgrades it to `attached` once it scans the
-  # live Ghostty terminal. (The wrapper writes the server remote-layout
-  # `state=present` row when it starts; this local row is the client-side
-  # projection ledger.)
+  # Write a local `opening` projection row before launching the surface. The
+  # wrapper upgrades it to `attached` once it starts; writing this row after
+  # the AppleScript launch can race and overwrite a fast wrapper's attached row.
   local _wl _wacq=0 _wi
   _wl="$(ghostty_zmx_projection_lock_path "$host_key" "$session")" 2>/dev/null || _wl=""
   if [[ -n "$_wl" ]]; then
@@ -2380,14 +2363,50 @@ OSA
     rmdir "$_wl" 2>/dev/null || true
   fi
 
-  # The remote-layout `add` is NOT done here: the projection wrapper writes
-  # the `state=present` row when it starts (the wrapper is the surface's own
-  # command tree). The widget only records host metadata here and starts the
-  # poller. See changelog
+  # Open the projection window from THIS surface-shell (zle) context. The
+  # ghostty-zmx wrapper (the surface's own command) writes the remote-layout
+  # `state=present` row when it starts; the widget does not write the layout
+  # row. See changelog
   # 2026-07-01-v0-2-multiplication-root-cause-orphaned-poller-shells.
-  { awk -F '\t' -v h="$host_key" '$1 != h { print }' "$GHOSTTY_ZMX_DATA_HOME/remote-hosts" 2>/dev/null || true
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$host_key" "$transport" "$version_value" active "$prefix_string" "$zmx_path"
-  } > "$GHOSTTY_ZMX_DATA_HOME/remote-hosts.tmp.$$" 2>/dev/null && mv "$GHOSTTY_ZMX_DATA_HOME/remote-hosts.tmp.$$" "$GHOSTTY_ZMX_DATA_HOME/remote-hosts" 2>/dev/null
+  local command_string applescript_command script_applescript_command _open_script _open_log _open_launch_rc=0
+  command_string="$(ghostty_zmx_projection_command_string "$host_key" "$workspace" "$session" "$prefix_string" "$zmx_path")"
+  applescript_command="${command_string//\\\\/\\\\\\\\}"
+  applescript_command="${applescript_command//\"/\\\"}"
+  # The opener script is itself generated through an expanded here-doc. Double
+  # backslashes one more time so AppleScript still receives escaped backslashes
+  # after zsh writes the helper file.
+  script_applescript_command="${applescript_command//\\/\\\\}"
+  _gzmx_widget_debug "widget opening host=$host_key session=$session cmd=$command_string"
+  _open_script="$(_ghostty_zmx_runtime_path "open-${session}.zsh" 2>/dev/null)" || _open_script=""
+  _open_log="$(_ghostty_zmx_runtime_path "open-${session}.log" 2>/dev/null)" || _open_log="/dev/null"
+  if [[ -z "$_open_script" ]]; then
+    _open_launch_rc=1
+  else
+    cat > "$_open_script" <<EOS
+#!/bin/zsh
+sleep 0.05
+osascript <<'OSA'
+tell application "$_ghostty_app_name"
+  set cfg to new surface configuration
+  set command of cfg to "$script_applescript_command"
+  set w to new window with configuration cfg
+  activate window w
+end tell
+OSA
+EOS
+    chmod 700 "$_open_script" 2>/dev/null || true
+    nohup /bin/zsh "$_open_script" >"$_open_log" 2>&1 </dev/null &!
+  fi
+  if [[ "$_open_launch_rc" -ne 0 ]]; then
+    _gzmx_widget_debug "widget open-launch-failed host=$host_key session=$session rc=$_open_launch_rc"
+    ghostty_zmx_remove_remote_projection "$host_key" "$session"
+    print -P "\nghostty-zmx: could not launch projection opener for $host_key (exit $_open_launch_rc).\n"
+    _gzmx_widget_refresh_history
+    BUFFER=""
+    zle reset-prompt
+    return
+  fi
+  _gzmx_widget_debug "widget open-submitted host=$host_key session=$session"
 
   # Start the poller (detached) so server-side layout changes (new present
   # rows from other clients, closing/deleted from another client) are
@@ -2396,6 +2415,16 @@ OSA
   # and is PID-reuse-safe (elapsed-seconds token). See changelog
   # 2026-07-01-v0-2-multiplication-root-cause-orphaned-poller-shells.
   [[ "${GHOSTTY_ZMX_DISABLE_POLLER:-0}" != "1" ]] && ghostty_zmx_start_remote_poller force
+  if ! ghostty_zmx_wait_remote_projection "$host_key" "$workspace" "$session" 40 0.25; then
+    _gzmx_widget_debug "widget open-unobserved host=$host_key session=$session"
+    ghostty_zmx_remove_remote_projection "$host_key" "$session"
+    print -P "\nghostty-zmx: submitted remote $host_key ($session), but no projection window was observed.\n"
+    _gzmx_widget_refresh_history
+    BUFFER=""
+    zle reset-prompt
+    return
+  fi
+  _gzmx_widget_debug "widget opened host=$host_key session=$session"
   print -P "\nghostty-zmx: opened remote $host_key ($session)\n"
   _gzmx_widget_refresh_history
   BUFFER=""
