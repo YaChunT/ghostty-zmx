@@ -350,6 +350,98 @@ print "  PASS test 7"
 rm -f "$runtime/remote-poller-${reg_pid}.zsh"
 rm -rf "$runtime/remote-poller-Ghostty-tip-${reg_pid}.lock"
 
+# ---------------------------------------------------------------------------
+# Test 8: stale opening rows are not "known" and must not block restore.
+# After Cmd-Q/reopen or a failed opener, a local row can be left as:
+#   state=opening, tty=-, pid=-
+# Once its TTL has expired, grouped restore must be allowed to recreate the
+# projection from the server-authoritative `present` row.
+# ---------------------------------------------------------------------------
+print ""
+print "test 8: stale opening rows do not block restore"
+
+now="$(date +%s)"
+old=$(( now - 120 ))
+fresh=$(( now ))
+cat > "$projections_file" <<EOF
+gzmx-fixture	ws1	gzr-stale-opening	-	-	opening	${old}	-	-
+gzmx-fixture	ws1	gzr-fresh-opening	-	-	opening	${fresh}	-	-
+gzmx-fixture	ws1	gzr-attached	/dev/ttys001	${$}	attached	${fresh}	win	tab
+gzmx-fixture	ws1	gzr-closing	/dev/ttys002	999888	closing	${fresh}	win	tab
+EOF
+
+GHOSTTY_ZMX_OPENING_TTL=30 ghostty_zmx_projection_known "gzmx-fixture" "gzr-stale-opening" 2>/dev/null && {
+  print -u2 "FAIL: stale opening row should not be known"
+  exit 1
+}
+print "  ok: stale opening row is not known"
+
+GHOSTTY_ZMX_OPENING_TTL=30 ghostty_zmx_projection_known "gzmx-fixture" "gzr-fresh-opening" 2>/dev/null || {
+  print -u2 "FAIL: fresh opening row should be known"
+  exit 1
+}
+print "  ok: fresh opening row is known"
+
+ghostty_zmx_projection_known "gzmx-fixture" "gzr-attached" 2>/dev/null || {
+  print -u2 "FAIL: attached row should be known"
+  exit 1
+}
+ghostty_zmx_projection_known "gzmx-fixture" "gzr-closing" 2>/dev/null || {
+  print -u2 "FAIL: closing row should be known"
+  exit 1
+}
+print "  ok: attached/closing rows remain known"
+print "  PASS test 8"
+
+# ---------------------------------------------------------------------------
+# Test 9: unobserved opens are cleaned up immediately.
+# AppleScript can return before a usable projection process exists; callers
+# must remove the optimistic `opening` row so the poller can retry.
+# ---------------------------------------------------------------------------
+print ""
+print "test 9: unobserved opens remove opening row"
+
+cat > "$projections_file" <<EOF
+gzmx-fixture	ws1	gzr-unobserved	-	-	opening	${fresh}	-	-
+EOF
+
+ghostty_zmx_wait_remote_projection() { return 1; }
+GHOSTTY_ZMX_OPENING_TTL=30 ghostty_zmx_confirm_remote_projection_open "gzmx-fixture" "ws1" "gzr-unobserved" 1 0 2>/dev/null && {
+  print -u2 "FAIL: unobserved open should fail"
+  exit 1
+}
+if grep -q "gzr-unobserved" "$projections_file" 2>/dev/null; then
+  print -u2 "FAIL: unobserved opening row was not removed"
+  exit 1
+fi
+print "  ok: unobserved opening row removed"
+print "  PASS test 9"
+
+# ---------------------------------------------------------------------------
+# Test 10: close grace distinguishes pane close from Cmd-Q teardown.
+# A fresh `closing` row should wait; an old one should be eligible for the
+# server close transaction.
+# ---------------------------------------------------------------------------
+print ""
+print "test 10: projection close grace"
+
+now="$(date +%s)"
+GHOSTTY_ZMX_CLOSE_GRACE=4 ghostty_zmx_projection_close_grace_elapsed "$now" 2>/dev/null && {
+  print -u2 "FAIL: fresh closing row should still be in grace"
+  exit 1
+}
+old=$(( now - 10 ))
+GHOSTTY_ZMX_CLOSE_GRACE=4 ghostty_zmx_projection_close_grace_elapsed "$old" 2>/dev/null || {
+  print -u2 "FAIL: old closing row should be past grace"
+  exit 1
+}
+GHOSTTY_ZMX_CLOSE_GRACE=0 ghostty_zmx_projection_close_grace_elapsed "$now" 2>/dev/null || {
+  print -u2 "FAIL: zero grace should elapse immediately"
+  exit 1
+}
+print "  ok: fresh waits, old/zero-grace elapse"
+print "  PASS test 10"
+
 print ""
 print "all remote-lifecycle tests passed"
 exit 0

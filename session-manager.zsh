@@ -1181,11 +1181,29 @@ ghostty_zmx_wait_remote_projection() {
   return 1
 }
 
+ghostty_zmx_confirm_remote_projection_open() {
+  emulate -L zsh
+  local host="$1" workspace="$2" session="$3" attempts="${4:-60}" delay="${5:-0.25}"
+  if ghostty_zmx_wait_remote_projection "$host" "$workspace" "$session" "$attempts" "$delay"; then
+    return 0
+  fi
+  ghostty_zmx_remove_remote_projection "$host" "$session"
+  _ghostty_zmx_debug "projection open-unobserved host=$host session=$session"
+  return 1
+}
+
 ghostty_zmx_projection_known() {
   emulate -L zsh
-  local host="$1" session="$2" projection_file="$(ghostty_zmx_remote_projections_file)"
+  local host="$1" session="$2" projection_file="$(ghostty_zmx_remote_projections_file)" now ttl="${GHOSTTY_ZMX_OPENING_TTL:-30}"
   [[ -f "$projection_file" ]] || return 1
-  awk -F '\t' -v host="$host" -v session="$session" '$1 == host && $3 == session && ($6 == "opening" || $6 == "attached" || $6 == "closing") { found=1 } END { exit(found ? 0 : 1) }' "$projection_file" 2>/dev/null
+  now="$(date +%s)"
+  awk -F '\t' -v host="$host" -v session="$session" -v now="$now" -v ttl="$ttl" '
+    $1 == host && $3 == session {
+      if ($6 == "attached" || $6 == "closing") found=1
+      else if ($6 == "opening" && $7 ~ /^[0-9]+$/ && now - $7 < ttl) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$projection_file" 2>/dev/null
 }
 
 # Return 0 if the projection row for host+session is a non-stale opening (a
@@ -1210,6 +1228,16 @@ ghostty_zmx_projection_closing() {
   local host="$1" session="$2" projection_file="$(ghostty_zmx_remote_projections_file)"
   [[ -f "$projection_file" ]] || return 1
   awk -F '\t' -v host="$host" -v session="$session" '$1 == host && $3 == session && $6 == "closing" { found=1 } END { exit(found ? 0 : 1) }' "$projection_file" 2>/dev/null
+}
+
+ghostty_zmx_projection_close_grace_elapsed() {
+  emulate -L zsh
+  local updated="$1" grace="${GHOSTTY_ZMX_CLOSE_GRACE:-4}" now
+  [[ "$grace" =~ ^[0-9]+$ ]] || grace=4
+  (( grace <= 0 )) && return 0
+  [[ "$updated" =~ ^[0-9]+$ ]] || return 0
+  now="$(date +%s)"
+  (( now - updated >= grace ))
 }
 
 ghostty_zmx_remove_remote_projection() {
@@ -1323,6 +1351,19 @@ ghostty_zmx_projection_command_string() {
   print -r -- "${env_prefix}$wrapper projection --host $host --workspace $workspace --session $session -- $prefix '$remote_zmx attach $session'"
 }
 
+ghostty_zmx_projection_launcher_command() {
+  emulate -L zsh
+  local session="$1" command_string="$2" script
+  [[ -n "$session" && -n "$command_string" ]] || return 1
+  script="$(_ghostty_zmx_runtime_path "projection-${session}.zsh" 2>/dev/null)" || return 1
+  {
+    print -r -- '#!/bin/zsh'
+    print -r -- "exec $command_string"
+  } > "$script" 2>/dev/null || return 1
+  chmod 700 "$script" 2>/dev/null || true
+  print -r -- "/bin/zsh $script"
+}
+
 # Recreate the remote window/tab/split layout from the server remote-layout's
 # `present` rows, instead of opening one flat window per session. Mirrors the
 # local _ghostty_zmx_restore grouping: rows are grouped by workspace/window/tab,
@@ -1361,11 +1402,9 @@ ghostty_zmx_restore_remote_layout() {
       ghostty_zmx_write_projection_row "$host" "$s_ws" "$s_session" "$_gzmx_found_tty" "$_gzmx_found_match_pid" attached "$win" "$tab"
       continue
     fi
-    # Skip if ANY local projection row exists for this session (attached, opening,
-    # or closing). The dead-pid cleanup path owns removing stale rows; if the
-    # grouped restore re-opens a session that still has a local row, it races
-    # the cleanup and creates a duplicate window (the "window recreated after
-    # close" bug). Only open projections for sessions with NO local row at all.
+    # Skip if a meaningful local projection row exists for this session
+    # (attached, closing, or a fresh opening). Stale opening rows are failed
+    # launches and must not block restore after Cmd-Q/reopen.
     if ghostty_zmx_projection_known "$host" "$s_session" 2>/dev/null; then
       _ghostty_zmx_debug "restore-layout skip-known host=$host session=$s_session"
       continue
@@ -1385,7 +1424,7 @@ ghostty_zmx_restore_remote_layout() {
 
   # Group rows by window then tab, preserving server order within each group.
   local -a _winKeys=()
-  local -A _seenWin=() _tabsByWin=()
+  local -A _seenWin=() _seenTab=() _tabsByWin=()
   local r _ws _win _tab _pane _session _parent _axis _ratio _wkey
   for r in "${rows[@]}"; do
     _ws="${r%%$'\t'*}"; r="${r#*$'\t'}"
@@ -1401,17 +1440,22 @@ ghostty_zmx_restore_remote_layout() {
       _winKeys+=("$_wkey")
       _tabsByWin[$_wkey]=""
     fi
-    _tabsByWin[$_wkey]="${_tabsByWin[$_wkey]} ${_tab}"
+    if [[ -z "${_seenTab[$_wkey:$_tab]:-}" ]]; then
+      _seenTab[$_wkey:$_tab]=1
+      _tabsByWin[$_wkey]="${_tabsByWin[$_wkey]} ${_tab}"
+    fi
   done
 
   local _restore_delay="${GHOSTTY_ZMX_RESTORE_STEP_DELAY:-1}"
   local _created_win="" _created_tab="" _first_in_win=1
   local _cur_wkey="" _cur_tab=""
-  local _command_string _as_cmd _rc
+  local _command_string _surface_command _as_cmd _rc
   for _wkey in "${_winKeys[@]}"; do
     local -a _tabList=(${=_tabsByWin[$_wkey]})
     local _tkey _first_in_tab=1
     _first_in_win=1
+    _created_win=""
+    _created_tab=""
     for _tkey in "${_tabList[@]}"; do
       # Collect full rows for this tab in server order.
       local -a _tabPanes=()
@@ -1460,13 +1504,18 @@ ghostty_zmx_restore_remote_layout() {
         fi
         ghostty_zmx_write_projection_row "$host" "$_p_ws" "$_p_session" "-" "-" opening "-" "-"
         _command_string="$(ghostty_zmx_projection_command_string "$host" "$_p_ws" "$_p_session" "$prefix")"
-        _as_cmd="${_command_string//\\\\/\\\\\\\\}"
+        _surface_command="$(ghostty_zmx_projection_launcher_command "$_p_session" "$_command_string")" || _surface_command=""
+        _as_cmd="${_surface_command//\\\\/\\\\\\\\}"
         _as_cmd="${_as_cmd//\"/\\\"}"
         _rc=0
+        if [[ -z "$_surface_command" ]]; then
+          _rc=1
+        fi
         if (( _first_in_win == 1 && _pidx == 1 )); then
           # First pane of a new window: new window with the projection command.
           _ghostty_zmx_debug "restore-layout new-window host=$host session=$_p_session wkey=$_wkey"
-          _created="$(_ghostty_zmx_applescript_surface_ids "$(osascript <<OSA 2>/dev/null
+          if [[ "$_rc" -eq 0 ]]; then
+            _created="$(_ghostty_zmx_applescript_surface_ids "$(osascript <<OSA 2>/dev/null
 tell application "$_ghostty_app_name"
   set cfg to new surface configuration
   set command of cfg to "$_as_cmd"
@@ -1479,17 +1528,20 @@ tell application "$_ghostty_app_name"
 end tell
 OSA
 )")" || _rc=$?
+          fi
           if [[ "$_rc" -eq 0 ]]; then
             _created_win="$(print -r -- "$_created" | awk '{print $1}')"
             _created_tab="$(print -r -- "$_created" | awk '{print $2}')"
           fi
+          _first_in_win=0
           # The first pane consumed the window's first tab; subsequent panes
           # in this tab must split, not open a new tab.
           _first_in_tab=0
         elif (( _first_in_tab == 1 )); then
           # First pane of a new tab in the current window.
           _ghostty_zmx_debug "restore-layout new-tab host=$host session=$_p_session wkey=$_wkey tab=$_tkey"
-          _created="$(_ghostty_zmx_applescript_surface_ids "$(osascript <<OSA 2>/dev/null
+          if [[ "$_rc" -eq 0 ]]; then
+            _created="$(_ghostty_zmx_applescript_surface_ids "$(osascript <<OSA 2>/dev/null
 tell application "$_ghostty_app_name"
   set targetWindow to missing value
   repeat with w in windows
@@ -1510,6 +1562,7 @@ tell application "$_ghostty_app_name"
 end tell
 OSA
 )")" || _rc=$?
+          fi
           if [[ "$_rc" -eq 0 ]]; then
             _created_tab="$(print -r -- "$_created" | awk '{print $2}')"
           fi
@@ -1519,7 +1572,8 @@ OSA
           local _dir="right"
           [[ "$_p_axis" == "vertical" ]] && _dir="down"
           _ghostty_zmx_debug "restore-layout split host=$host session=$_p_session wkey=$_wkey tab=$_tkey axis=$_p_axis dir=$_dir"
-          osascript <<OSA 2>/dev/null || _rc=$?
+          if [[ "$_rc" -eq 0 ]]; then
+            osascript <<OSA 2>/dev/null || _rc=$?
 tell application "$_ghostty_app_name"
   set targetWindow to missing value
   repeat with w in windows
@@ -1546,12 +1600,16 @@ tell application "$_ghostty_app_name"
   set newTerminal to split t direction $_dir with configuration cfg
 end tell
 OSA
+          fi
         fi
         rmdir "$_lock" 2>/dev/null || true
         if [[ "$_rc" -ne 0 ]]; then
+          ghostty_zmx_remove_remote_projection "$host" "$_p_session"
           _ghostty_zmx_debug "restore-layout open-failed host=$host session=$_p_session rc=$_rc"
         else
-          ( ghostty_zmx_wait_remote_projection "$host" "$_p_ws" "$_p_session" 60 0.25 ) &!
+          if ! ghostty_zmx_confirm_remote_projection_open "$host" "$_p_ws" "$_p_session" 60 0.25; then
+            _ghostty_zmx_debug "restore-layout open-unobserved host=$host session=$_p_session"
+          fi
         fi
         _pidx=$((_pidx+1))
         sleep "$_restore_delay"
@@ -1571,7 +1629,7 @@ ghostty_zmx_reconcile_remote_projection() {
   emulate -L zsh
   setopt local_options no_sh_word_split
   local host="$1" workspace="$2" session="$3" prefix="$4"
-  local lock_path acquired=0 i now command_string applescript_command
+  local lock_path acquired=0 i now command_string surface_command applescript_command
   [[ -n "$host" && -n "$workspace" && -n "$session" && -n "$prefix" ]] || return 1
   lock_path="$(ghostty_zmx_projection_lock_path "$host" "$session")" || return 1
   mkdir -p "${lock_path:h}" 2>/dev/null
@@ -1606,6 +1664,15 @@ ghostty_zmx_reconcile_remote_projection() {
   now="$(date +%s)"
   ghostty_zmx_write_projection_row "$host" "$workspace" "$session" "-" "-" opening "-" "-"
   command_string="$(ghostty_zmx_projection_command_string "$host" "$workspace" "$session" "$prefix")"
+  surface_command="$(ghostty_zmx_projection_launcher_command "$session" "$command_string")" || surface_command=""
+  if [[ -z "$surface_command" ]]; then
+    rmdir "$lock_path" 2>/dev/null || true
+    ghostty_zmx_remove_remote_projection "$host" "$session"
+    _ghostty_zmx_debug "reconcile launcher-failed host=$host session=$session"
+    return 1
+  fi
+  applescript_command="${surface_command//\\\\/\\\\\\\\}"
+  applescript_command="${applescript_command//\"/\\\"}"
   _ghostty_zmx_debug "reconcile opening host=$host session=$session cmd=$command_string"
   # Open the projection window via AppleScript `new window with configuration`
   # targeting the hosting app by name. This delivers the window to the
@@ -1618,7 +1685,7 @@ ghostty_zmx_reconcile_remote_projection() {
   osascript <<OSA 2>/dev/null || _open_rc=$?
 tell application "$_ghostty_app_name"
   set cfg to new surface configuration
-  set command of cfg to "$command_string"
+  set command of cfg to "$applescript_command"
   set w to new window with configuration cfg
   activate window w
 end tell
@@ -1629,8 +1696,7 @@ OSA
     return 1
   fi
   rmdir "$lock_path" 2>/dev/null || true
-  ( ghostty_zmx_wait_remote_projection "$host" "$workspace" "$session" 60 0.25 ) &!
-  return 0
+  ghostty_zmx_confirm_remote_projection_open "$host" "$workspace" "$session" 60 0.25
 }
 
 # Back-compat shim: callers that reserved externally now delegate to reconcile.
@@ -1753,7 +1819,19 @@ ghostty_zmx_poll_once() {
             # next poll cycle's grouped restore to re-open the just-closed
             # projection (the "reopen after close" bug). Keep the row as
             # `closing` so the next cycle retries the close-txn.
-            if ghostty_zmx_remote_close_transaction "$p_host" "$p_session" 2>/dev/null && ghostty_zmx_server_confirmed_deleted "$p_host" "$p_session" 2>/dev/null; then
+            #
+            # The first dead-pid observation is ambiguous: a user may have
+            # closed one projection, or Cmd-Q may be tearing down all surfaces.
+            # Mark it closing first and require one short grace window before
+            # mutating the server layout. A real pane close remains app-alive
+            # and is deleted on a later poll; Cmd-Q stops the poller before
+            # the server `present` row is destroyed.
+            if [[ "$p_state" != "closing" ]]; then
+              ghostty_zmx_write_projection_row "$p_host" "$p_workspace" "$p_session" "$p_tty" "$p_pid" closing "$p_win" "$p_tab"
+              _ghostty_zmx_debug "poller close-deferred host=$p_host session=$p_session pid=$p_pid"
+            elif ! ghostty_zmx_projection_close_grace_elapsed "$p_updated"; then
+              _ghostty_zmx_debug "poller close-wait host=$p_host session=$p_session pid=$p_pid updated=$p_updated"
+            elif ghostty_zmx_remote_close_transaction "$p_host" "$p_session" 2>/dev/null && ghostty_zmx_server_confirmed_deleted "$p_host" "$p_session" 2>/dev/null; then
               ghostty_zmx_remove_remote_projection "$p_host" "$p_session"
               _ghostty_zmx_debug "poller close-txn host=$p_host session=$p_session pid=$p_pid server=deleted"
             else
@@ -1783,6 +1861,9 @@ ghostty_zmx_poll_once() {
           [[ -n "$_gzmx_found_tab" ]] && tab="$(ghostty_zmx_hex_suffix "$_gzmx_found_tab" 2>/dev/null || print -r -- "$_gzmx_found_tab")"
           ghostty_zmx_write_projection_row "$p_host" "$p_workspace" "$p_session" "$_gzmx_found_tty" "$_gzmx_found_match_pid" attached "$win" "$tab"
           [[ "$p_state" == "opening" ]] && _ghostty_zmx_debug "poller adopted host=$p_host session=$p_session pid=$_gzmx_found_match_pid"
+        elif [[ "$p_state" == "opening" ]] && ! ghostty_zmx_projection_opening_fresh "$p_host" "$p_session" 2>/dev/null; then
+          ghostty_zmx_remove_remote_projection "$p_host" "$p_session"
+          _ghostty_zmx_debug "poller removed-stale-opening host=$p_host session=$p_session"
         fi
       done < "$projection_file"
     fi
