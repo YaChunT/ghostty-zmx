@@ -10,8 +10,9 @@
 #
 # This test uses a pty to faithfully reproduce the zle widget context: it
 # binds Enter to a widget that mimics ghostty_zmx_accept_line's history step,
-# types a handoff command, presses Enter (widget fires), then presses Up-arrow
-# and asserts the command is recalled into the buffer.
+# runs a marker command, types a handoff command, presses Enter (widget fires),
+# then presses Up-arrow and asserts the handoff command, not the marker command,
+# is recalled into the buffer.
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
@@ -52,7 +53,11 @@ if pid == 0:
 
 out = b''
 t0 = time.time()
-inputs = [b'tsh ssh pcad-dev\r', b'\x1b[A']  # handoff+Enter, then Up-arrow
+inputs = [
+    b'print -r -- GZMX_HISTORY_MARKER\r',
+    b'tsh ssh pcad-dev\r',
+    b'\x1b[A',
+]
 idx = 0
 last = time.time()
 while time.time() - t0 < 10:
@@ -74,7 +79,8 @@ except: pass
 clean = re.sub(r'\x1b\][0-9;]*[^\x07\x1b]*(\x07|\x1b\\)', '', out.decode('utf-8','replace'))
 clean = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
 # After Up-arrow, the buffer should contain 'tsh ssh pcad-dev' on the prompt line.
-if 'tsh ssh pcad-dev' in clean.split('P> ')[-1] if 'P> ' in clean else '':
+last_prompt = clean.split('P> ')[-1] if 'P> ' in clean else ''
+if 'tsh ssh pcad-dev' in last_prompt and 'GZMX_HISTORY_MARKER' not in last_prompt:
     print("  ok: handoff command recalled by Up-arrow")
     sys.exit(0)
 # Fallback: check the whole output for the command after the second prompt.

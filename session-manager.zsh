@@ -2207,9 +2207,20 @@ ghostty_zmx_accept_line() {
   # zle Up-arrow traverses is only refreshed on accept-line (which we skip) or
   # when SHARE_HISTORY re-reads on the next prompt cycle. Without fc -R, the
   # command is in the file but Up-arrow at the SAME prompt does not recall it.
-  # fc -R forces an immediate re-read so Up-arrow works right after the handoff.
+  # fc -R forces an immediate re-read in ordinary shells. The one-shot
+  # Up-arrow wrapper below covers managed zmx shells whose history cursor can
+  # still point at the command before the handoff.
+  local _gzmx_widget_refresh_history
+  _gzmx_widget_refresh_history() {
+    if [[ -n "${HISTFILE:-}" ]]; then
+      fc -R "$HISTFILE" 2>/dev/null || true
+    else
+      fc -R 2>/dev/null || true
+    fi
+  }
   print -s -- "$original_buffer" 2>/dev/null || true
-  fc -R 2>/dev/null || true
+  _gzmx_widget_refresh_history
+  typeset -g _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL="$original_buffer"
 
   local -a probe
   projection=(${words[@]})
@@ -2306,6 +2317,7 @@ ghostty_zmx_accept_line() {
   probe_msg="$(ghostty_zmx_probe_result "$host_key" "$probe_out" "$probe_rc")"
   if [[ $? -ne 0 ]]; then
     print -r -- "$probe_msg"
+    _gzmx_widget_refresh_history
     BUFFER=""
     zle reset-prompt
     return
@@ -2369,8 +2381,36 @@ OSA
   # 2026-07-01-v0-2-multiplication-root-cause-orphaned-poller-shells.
   [[ "${GHOSTTY_ZMX_DISABLE_POLLER:-0}" != "1" ]] && ghostty_zmx_start_remote_poller force
   print -P "\nghostty-zmx: opened remote $host_key ($session)\n"
+  _gzmx_widget_refresh_history
   BUFFER=""
   zle reset-prompt
+}
+
+ghostty_zmx_up_line_or_handoff_history() {
+  emulate -L zsh
+  setopt local_options no_sh_word_split
+  if [[ -n "${_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL:-}" && -z "${BUFFER:-}" ]]; then
+    local _gzmx_last_history=""
+    if [[ -n "${HISTFILE:-}" && -r "$HISTFILE" ]]; then
+      _gzmx_last_history="$(tail -n 1 "$HISTFILE" 2>/dev/null)"
+      [[ "$_gzmx_last_history" == ": "*";"* ]] && _gzmx_last_history="${_gzmx_last_history#*;}"
+    fi
+    if [[ -z "$_gzmx_last_history" || "$_gzmx_last_history" == "$_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL" ]]; then
+      BUFFER="$_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL"
+      CURSOR=${#BUFFER}
+      _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL=""
+      zle redisplay
+      return
+    fi
+    _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL=""
+  fi
+
+  local _gzmx_previous="${_GHOSTTY_ZMX_PREVIOUS_UP_WIDGET:-up-line-or-history}"
+  if [[ "$_gzmx_previous" == "ghostty_zmx_up_line_or_handoff_history" || -z "$_gzmx_previous" ]]; then
+    zle .up-line-or-history
+  else
+    zle "$_gzmx_previous" 2>/dev/null || zle .up-line-or-history
+  fi
 }
 
 
@@ -2379,8 +2419,19 @@ _ghostty_zmx_install_accept_line_widget() {
   [[ "${TERM_PROGRAM:-}" == "ghostty" ]] || return 0
   [[ "${GHOSTTY_ZMX_AUTO_ATTACH:-}" == "1" ]] || return 0
   zle -N ghostty_zmx_accept_line 2>/dev/null || return 0
+  zle -N ghostty_zmx_up_line_or_handoff_history 2>/dev/null || true
   bindkey '^M' ghostty_zmx_accept_line 2>/dev/null || true
   bindkey '^J' ghostty_zmx_accept_line 2>/dev/null || true
+  local _gzmx_up_seq _gzmx_binding _gzmx_previous
+  for _gzmx_up_seq in "${terminfo[kcuu1]:-$'\e[A'}" $'\e[A' $'\eOA'; do
+    [[ -n "$_gzmx_up_seq" ]] || continue
+    _gzmx_binding="$(bindkey "$_gzmx_up_seq" 2>/dev/null || true)"
+    _gzmx_previous="${${(z)_gzmx_binding}[-1]}"
+    if [[ -n "$_gzmx_previous" && "$_gzmx_previous" != "ghostty_zmx_up_line_or_handoff_history" ]]; then
+      typeset -g _GHOSTTY_ZMX_PREVIOUS_UP_WIDGET="$_gzmx_previous"
+    fi
+    bindkey "$_gzmx_up_seq" ghostty_zmx_up_line_or_handoff_history 2>/dev/null || true
+  done
 }
 
 _ghostty_zmx_auto_attach() {

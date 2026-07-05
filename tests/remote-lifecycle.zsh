@@ -19,6 +19,7 @@ export HOME="$workdir/home"
 export GHOSTTY_ZMX_DATA_HOME="$workdir/data/ghostty-zmx"
 export GHOSTTY_ZMX_STATE_HOME="$workdir/state/ghostty-zmx"
 export XDG_RUNTIME_DIR="$workdir/runtime"
+unset TERM_PROGRAM GHOSTTY_RESOURCES_DIR 2>/dev/null || true
 mkdir -p "$HOME" "$GHOSTTY_ZMX_DATA_HOME" "$GHOSTTY_ZMX_STATE_HOME" "$XDG_RUNTIME_DIR"
 
 # Stub osascript so no real Ghostty is needed. Returns a fixed window count.

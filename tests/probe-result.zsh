@@ -17,6 +17,7 @@ trap 'rm -rf "$workdir"' EXIT
 export HOME="$workdir/home"
 export GHOSTTY_ZMX_DATA_HOME="$workdir/data/ghostty-zmx"
 export GHOSTTY_ZMX_STATE_HOME="$workdir/state/ghostty-zmx"
+unset TERM_PROGRAM GHOSTTY_RESOURCES_DIR 2>/dev/null || true
 mkdir -p "$HOME" "$GHOSTTY_ZMX_DATA_HOME" "$GHOSTTY_ZMX_STATE_HOME"
 
 # Source the manager without triggering auto-attach (no AUTO_ATTACH/TERM_PROGRAM).

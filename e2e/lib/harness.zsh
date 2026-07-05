@@ -384,6 +384,90 @@ end tell
 OSA
 }
 
+gzmx_e2e_front_window_id() {
+  emulate -L zsh
+  osascript -e "tell application \"$GZMX_E2E_GHOSTTY_APP\" to get id of front window" 2>/dev/null
+}
+
+# Type text into a specific Ghostty window id without activating it, then press
+# Enter. Window ids are stable when projection windows are opened and reordered
+# during a handoff.
+gzmx_e2e_type_in_window_id_direct() {
+  emulate -L zsh
+  setopt local_options no_err_return
+  local window_id="$1" text="$2"
+  local escaped_window_id="${window_id//\\/\\\\}"
+  escaped_window_id="${escaped_window_id//\"/\\\"}"
+  local escaped="${text//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  osascript <<OSA 2>/dev/null || true
+tell application "$GZMX_E2E_GHOSTTY_APP"
+  set targetWindow to missing value
+  repeat with candidateWindow in windows
+    if id of candidateWindow is "$escaped_window_id" then
+      set targetWindow to candidateWindow
+      exit repeat
+    end if
+  end repeat
+  if targetWindow is not missing value then
+    set tb to selected tab of targetWindow
+    set tm to focused terminal of tb
+    input text "$escaped" to tm
+    send key "enter" to tm
+  end if
+end tell
+OSA
+}
+
+gzmx_e2e_terminal_control_in_window_id() {
+  emulate -L zsh
+  setopt local_options no_err_return
+  local window_id="$1" control="$2"
+  local escaped_window_id="${window_id//\\/\\\\}"
+  escaped_window_id="${escaped_window_id//\"/\\\"}"
+  local key="" modifiers=""
+  case "$control" in
+    up) key="arrowUp" ;;
+    ctrl-a) key="a"; modifiers="control" ;;
+    *) gzmx_e2e_fail "unknown terminal control sequence: $control" ;;
+  esac
+  if [[ -n "$modifiers" ]]; then
+    osascript <<OSA 2>/dev/null || true
+tell application "$GZMX_E2E_GHOSTTY_APP"
+  set targetWindow to missing value
+  repeat with candidateWindow in windows
+    if id of candidateWindow is "$escaped_window_id" then
+      set targetWindow to candidateWindow
+      exit repeat
+    end if
+  end repeat
+  if targetWindow is not missing value then
+    set tb to selected tab of targetWindow
+    set tm to focused terminal of tb
+    send key "$key" modifiers {"$modifiers"} to tm
+  end if
+end tell
+OSA
+  else
+    osascript <<OSA 2>/dev/null || true
+tell application "$GZMX_E2E_GHOSTTY_APP"
+  set targetWindow to missing value
+  repeat with candidateWindow in windows
+    if id of candidateWindow is "$escaped_window_id" then
+      set targetWindow to candidateWindow
+      exit repeat
+    end if
+  end repeat
+  if targetWindow is not missing value then
+    set tb to selected tab of targetWindow
+    set tm to focused terminal of tb
+    send key "$key" to tm
+  end if
+end tell
+OSA
+  fi
+}
+
 # Type text WITHOUT pressing Enter (for pre-fill scenarios).
 gzmx_e2e_type_no_enter() {
   emulate -L zsh
@@ -450,6 +534,25 @@ gzmx_e2e_wait_for() {
     sleep 0.25
   done
   return 1
+}
+
+gzmx_e2e_local_session() {
+  emulate -L zsh
+  local sessions_file="$GZMX_E2E_DATA_HOME/sessions" session i
+  for (( i=1; i<=40; i++ )); do
+    if [[ -r "$sessions_file" ]]; then
+      session="$(awk '/^zmx-/ { print; exit }' "$sessions_file" 2>/dev/null)"
+      [[ -n "$session" ]] && { print -r -- "$session"; return 0; }
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+gzmx_e2e_local_history_compact() {
+  emulate -L zsh
+  local session="$1"
+  zmx history "$session" 2>/dev/null | tr -d '\r\n'
 }
 
 # The absolute zmx path on the fixture (zmx is NOT on the non-interactive PATH —
