@@ -1357,11 +1357,11 @@ ghostty_zmx_projection_launcher_command() {
   [[ -n "$session" && -n "$command_string" ]] || return 1
   script="$(_ghostty_zmx_runtime_path "projection-${session}.zsh" 2>/dev/null)" || return 1
   {
-    print -r -- '#!/bin/zsh'
+    print -r -- '#!/bin/zsh -f'
     print -r -- "exec $command_string"
   } > "$script" 2>/dev/null || return 1
   chmod 700 "$script" 2>/dev/null || true
-  print -r -- "/bin/zsh $script"
+  print -r -- "/bin/zsh -f $script"
 }
 
 # Recreate the remote window/tab/split layout from the server remote-layout's
@@ -1380,7 +1380,7 @@ ghostty_zmx_projection_launcher_command() {
 # Args: host prefix layout(TSV from server remote-layout)
 ghostty_zmx_restore_remote_layout() {
   emulate -L zsh
-  setopt local_options no_sh_word_split
+  setopt local_options no_sh_word_split typeset_silent
   local host="$1" prefix="$2" layout="$3"
   [[ -n "$host" && -n "$prefix" && -n "$layout" ]] || return 1
 
@@ -1457,6 +1457,7 @@ ghostty_zmx_restore_remote_layout() {
     _created_win=""
     _created_tab=""
     for _tkey in "${_tabList[@]}"; do
+      _first_in_tab=1
       # Collect full rows for this tab in server order.
       local -a _tabPanes=()
       for r in "${rows[@]}"; do
@@ -1614,7 +1615,6 @@ OSA
         _pidx=$((_pidx+1))
         sleep "$_restore_delay"
       done
-      _first_in_tab=0
     done
     _first_in_win=0
   done

@@ -442,6 +442,64 @@ GHOSTTY_ZMX_CLOSE_GRACE=0 ghostty_zmx_projection_close_grace_elapsed "$now" 2>/d
 print "  ok: fresh waits, old/zero-grace elapse"
 print "  PASS test 10"
 
+# ---------------------------------------------------------------------------
+# Test 11: projection launcher uses zsh -f.
+# Restore-created projection surfaces must not source .zprofile/.zshrc before
+# execing the wrapper, or a restored tab can run the inherit hook and create an
+# extra gzr-* session.
+# ---------------------------------------------------------------------------
+print ""
+print "test 11: projection launcher uses zsh -f"
+
+_launcher_cmd="$(ghostty_zmx_projection_launcher_command "gzr-launcher-test" "/bin/echo ok")"
+[[ "$_launcher_cmd" == "/bin/zsh -f "* ]] || { print -u2 "FAIL: launcher command should use /bin/zsh -f, got $_launcher_cmd"; exit 1; }
+_launcher_script="${_launcher_cmd#/bin/zsh -f }"
+head -1 "$_launcher_script" | grep -qxF '#!/bin/zsh -f' || { print -u2 "FAIL: launcher script shebang should use zsh -f"; exit 1; }
+print "  ok: launcher command and shebang use zsh -f"
+print "  PASS test 11"
+
+# ---------------------------------------------------------------------------
+# Test 12: grouped remote restore resets the "first tab" flag per tab.
+# Regression: after restoring tab 1, _first_in_tab stayed false for tab 2, so
+# the first pane of tab 2 was restored as a split in tab 1 instead of a new tab.
+# ---------------------------------------------------------------------------
+print ""
+print "test 12: grouped restore opens second tab as tab, not split"
+
+: > "$projections_file"
+_restore_calls="$workdir/restore-calls.log"
+: > "$_restore_calls"
+ghostty_zmx_find_live_projection() { return 1; }
+ghostty_zmx_wait_remote_projection() { return 0; }
+ghostty_zmx_projection_launcher_command() { print -r -- "/bin/true"; }
+osascript() {
+  local script
+  script="$(cat)"
+  if [[ "$script" == *"new tab in targetWindow"* ]]; then
+    print -r -- "new-tab" >> "$_restore_calls"
+    print -r -- "window:aaaaaaaaaaaaaaaa tab-group-ghostty-zmx-test/tab-bbbbbbbb"
+  elif [[ "$script" == *"split t direction"* ]]; then
+    print -r -- "split" >> "$_restore_calls"
+  elif [[ "$script" == *"new window with configuration"* ]]; then
+    print -r -- "new-window" >> "$_restore_calls"
+    print -r -- "window:aaaaaaaaaaaaaaaa tab-group-ghostty-zmx-test/tab-aaaaaaaa"
+  elif [[ "$*" == *"count of windows"* ]]; then
+    print -r -- "1"
+  fi
+}
+
+_layout=$'wsaaaaaa\twinbbbbbb\ttab111111\tpane111\tgzr-wsaaaaaa-winbbbbbb-tab111111-pane111\t-\troot\t1\tpresent\t100\t1\nwsaaaaaa\twinbbbbbb\ttab222222\tpane222\tgzr-wsaaaaaa-winbbbbbb-tab222222-pane222\t-\troot\t1\tpresent\t100\t2'
+GHOSTTY_ZMX_RESTORE_STEP_DELAY=0 ghostty_zmx_restore_remote_layout "gzmx-fixture" "ssh -t fixture" "$_layout"
+
+grep -qxF "new-window" "$_restore_calls" || { print -u2 "FAIL: expected first restored tab to open a new window"; exit 1; }
+grep -qxF "new-tab" "$_restore_calls" || { print -u2 "FAIL: expected second restored tab to open a new tab"; exit 1; }
+if grep -qxF "split" "$_restore_calls"; then
+  print -u2 "FAIL: second restored tab was opened as a split"
+  exit 1
+fi
+print "  ok: second tab restored with new-tab path"
+print "  PASS test 12"
+
 print ""
 print "all remote-lifecycle tests passed"
 exit 0

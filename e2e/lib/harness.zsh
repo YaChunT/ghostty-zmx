@@ -369,6 +369,49 @@ end tell
 OSA
 }
 
+# Create a native tab in the front window via AppleScript. The new tab uses the
+# default shell, so it sources the ghostty-zmx startup hooks and exercises the
+# remote tab inheritance path.
+gzmx_e2e_new_tab_focused() {
+  emulate -L zsh
+  setopt local_options no_err_return
+  osascript <<OSA 2>/dev/null || true
+tell application "$GZMX_E2E_GHOSTTY_APP"
+  set w to front window
+  set cfg to new surface configuration
+  set tb to new tab in w with configuration cfg
+  select tab tb
+  activate window w
+end tell
+OSA
+}
+
+gzmx_e2e_new_tab_in_window_id_suffix() {
+  emulate -L zsh
+  setopt local_options no_err_return
+  local window_suffix="$1"
+  local escaped="${window_suffix//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  osascript <<OSA 2>/dev/null || true
+tell application "$GZMX_E2E_GHOSTTY_APP"
+  set targetWindow to missing value
+  repeat with w in windows
+    set winStr to id of w as string
+    if winStr ends with "$escaped" then
+      set targetWindow to w
+      exit repeat
+    end if
+  end repeat
+  if targetWindow is not missing value then
+    activate window targetWindow
+    set cfg to new surface configuration
+    set tb to new tab in targetWindow with configuration cfg
+    select tab tb
+  end if
+end tell
+OSA
+}
+
 # Type text into window N (1-indexed), focused terminal of its selected tab.
 # Activates the window first so input lands in the right pane.
 gzmx_e2e_type_in_window() {
@@ -525,6 +568,57 @@ gzmx_e2e_assert_window_count() {
   [[ "$actual" == "$expected" ]] \
     || gzmx_e2e_fail "window count: expected $expected, got $actual"
   gzmx_e2e_pass "window count == $expected"
+}
+
+gzmx_e2e_assert_window_with_tabs_and_terminals() {
+  emulate -L zsh
+  local expected_tabs="$1" expected_terms="$2" found
+  found="$(osascript <<OSA 2>/dev/null
+tell application "$GZMX_E2E_GHOSTTY_APP"
+  repeat with w in windows
+    if (count of tabs of w) is $expected_tabs then
+      set okShape to true
+      repeat with tb in tabs of w
+        if (count of terminals of tb) is not $expected_terms then
+          set okShape to false
+        end if
+      end repeat
+      if okShape then return "1"
+    end if
+  end repeat
+  return "0"
+end tell
+OSA
+)"
+  [[ "$found" == "1" ]] \
+    || gzmx_e2e_fail "no window with $expected_tabs tabs and $expected_terms terminals per tab"
+  gzmx_e2e_pass "window shape includes $expected_tabs tabs x $expected_terms terminal(s)"
+}
+
+gzmx_e2e_assert_window_id_with_tabs_and_terminals() {
+  emulate -L zsh
+  local window_suffix="$1" expected_tabs="$2" expected_terms="$3" found
+  local escaped="${window_suffix//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  found="$(osascript <<OSA 2>/dev/null
+tell application "$GZMX_E2E_GHOSTTY_APP"
+  repeat with w in windows
+    set winStr to id of w as string
+    if winStr ends with "$escaped" then
+      if (count of tabs of w) is not $expected_tabs then return "0"
+      repeat with tb in tabs of w
+        if (count of terminals of tb) is not $expected_terms then return "0"
+      end repeat
+      return "1"
+    end if
+  end repeat
+  return "0"
+end tell
+OSA
+)"
+  [[ "$found" == "1" ]] \
+    || gzmx_e2e_fail "window $window_suffix does not have $expected_tabs tabs and $expected_terms terminals per tab"
+  gzmx_e2e_pass "window $window_suffix has $expected_tabs tabs x $expected_terms terminal(s)"
 }
 
 # Wait up to N seconds for a condition (function name) to return 0.
