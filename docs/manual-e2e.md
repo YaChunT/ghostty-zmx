@@ -48,13 +48,15 @@ For manual testing of the live checkout on Ghostty-tip only, install the dev cop
 e2e/setup-ghostty-tip.zsh --install-live
 ```
 
-This installs the checkout under `~/.config/ghostty-zmx-tip` by default, writes an isolated Ghostty-tip config under `~/.config/ghostty-tip`, and writes an isolated `ZDOTDIR` under `~/.config/ghostty-tip-zdotdir`. It does not edit stable Ghostty, stable Ghostty config, `~/.zshrc`, or `~/.zprofile`. The generated `ZDOTDIR` sources user dotfiles with `GHOSTTY_ZMX_AUTO_ATTACH=0` first, then sources the tip install so an existing stable/default ghostty-zmx install stays dormant.
+This installs the checkout under `~/.config/ghostty-zmx-tip` by default, writes an isolated Ghostty-tip config under `~/.config/ghostty-tip`, and writes an isolated `ZDOTDIR` under `~/.config/ghostty-tip-zdotdir`. It does not edit stable Ghostty, stable Ghostty config, `~/.zshrc`, or `~/.zprofile`. The isolated config sets `GHOSTTY_ZMX_APP_NAME=Ghostty-tip` because copied tip bundles can still expose `GHOSTTY_RESOURCES_DIR` pointing at stable Ghostty. The generated `ZDOTDIR` sources user dotfiles with `GHOSTTY_ZMX_AUTO_ATTACH=0` first, then sources the tip install so an existing stable/default ghostty-zmx install stays dormant.
 
 Launch the isolated live copy with:
 
 ```sh
 ~/.config/ghostty-tip/open-ghostty-tip.zsh
 ```
+
+The launcher intentionally uses `open -F -n -a Ghostty-tip --args ...`. `-F` prevents macOS from restoring stale Ghostty-tip windows without the isolated args. Do not use `open -na /Applications/Ghostty-tip.app`; `-a` is for app names, not bundle paths, and can leave Ghostty-tip running without a terminal window or the isolated config.
 
 Run all scenarios with the Docker sshd fixture:
 

@@ -542,6 +542,10 @@ managed_sessions_from_log() {
 }
 
 managed_detached_sessions() {
+  local liveTtys=""
+  if (( $+functions[current_terminal_ttys] )); then
+    liveTtys="$(current_terminal_ttys 2>/dev/null | grep '^/dev/' 2>/dev/null || true)"
+  fi
   zmx list 2>/dev/null | awk -F '\t' '$1 ~ /name=zmx-/ && $3=="clients=0" { sub(/^[→ ]*name=/, "", $1); print $1 }' |
   while IFS= read -r orphan; do
     [[ -n "$orphan" ]] || continue
@@ -550,6 +554,14 @@ managed_detached_sessions() {
       continue
     fi
     grep -qxF "$orphan" "$log" 2>/dev/null || continue
+    if [[ -n "$liveTtys" && -n "${ttyMap:-}" && -f "$ttyMap" ]]; then
+      local mappedTty=""
+      mappedTty="$(awk -F '\t' -v s="$orphan" '$1 == "S" && $2 == s { print $3; exit }' "$ttyMap" 2>/dev/null)"
+      if [[ -n "$mappedTty" ]] && print -r -- "$liveTtys" | grep -qxF "$mappedTty" 2>/dev/null; then
+        debug_log "managed-detached skipped reason=terminal-live session=$orphan tty=$mappedTty"
+        continue
+      fi
+    fi
     print -r -- "$orphan"
   done
 }
@@ -2552,7 +2564,15 @@ _ghostty_zmx_auto_attach() {
     fi
   fi
 
-  typeset position=$(_ghostty_zmx_current_position)
+  typeset position="" _pos_attempt
+  typeset -i _pos_attempts="${GHOSTTY_ZMX_POSITION_ATTEMPTS:-60}"
+  typeset _pos_delay="${GHOSTTY_ZMX_POSITION_DELAY:-0.25}"
+  for (( _pos_attempt=1; _pos_attempt<=_pos_attempts; _pos_attempt++ )); do
+    position="$(_ghostty_zmx_current_position)"
+    [[ -n "$position" ]] && break
+    _ghostty_zmx_debug "auto-attach position-not-ready attempt=$_pos_attempt"
+    sleep "$_pos_delay"
+  done
   _ghostty_zmx_debug "current position result=${position:-missing}"
   if [[ -z "$sessionName" && -n "$position" ]]; then
     position=$(_ghostty_zmx_apply_position_map "$position")

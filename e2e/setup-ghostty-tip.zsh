@@ -142,6 +142,7 @@ install_live_files() {
   cat > "$tip_config" <<EOF
 # ghostty-tip isolated ghostty-zmx config
 env = ZDOTDIR=$tip_zdotdir
+env = GHOSTTY_ZMX_APP_NAME=$app_name
 env = GHOSTTY_ZMX_AUTO_ATTACH=1
 env = GHOSTTY_ZMX_INSTALL_DIR=$install_dir
 window-save-state = never
@@ -160,6 +161,7 @@ else
   unset GHOSTTY_ZMX_AUTO_ATTACH
 fi
 unset _gzmx_tip_saved_auto_attach _gzmx_tip_had_auto_attach
+unset _GHOSTTY_ZMX_LIB_SOURCED
 [[ -r ${(qqq)install_dir}/session-manager-early.zsh ]] && source ${(qqq)install_dir}/session-manager-early.zsh
 EOF
 
@@ -175,12 +177,13 @@ else
   unset GHOSTTY_ZMX_AUTO_ATTACH
 fi
 unset _gzmx_tip_saved_auto_attach _gzmx_tip_had_auto_attach
+unset _GHOSTTY_ZMX_LIB_SOURCED
 [[ -r ${(qqq)install_dir}/session-manager.zsh ]] && source ${(qqq)install_dir}/session-manager.zsh
 EOF
 
   cat > "$tip_launcher" <<EOF
 #!/bin/zsh
-exec open -na ${(q)target} --args \\
+exec open -F -n -a ${(q)app_name} --args \\
   --config-default-files=false \\
   --config-file=${(q)tip_config}
 EOF
@@ -195,7 +198,7 @@ EOF
   print "Launch with:"
   print "  $tip_launcher"
   print "or:"
-  print "  open -na ${(q)target} --args --config-default-files=false --config-file=${(q)tip_config}"
+  print "  open -F -n -a ${(q)app_name} --args --config-default-files=false --config-file=${(q)tip_config}"
 }
 
 if [[ -n "$url" ]]; then
