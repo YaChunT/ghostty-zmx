@@ -2144,17 +2144,18 @@ ghostty_zmx_accept_line() {
   setopt local_options no_sh_word_split
   local _gzmx_widget_log="${GHOSTTY_ZMX_STATE_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/ghostty-zmx}/debug.log"
   local _gzmx_widget_debug() { [[ "${GHOSTTY_ZMX_DEBUG:-0}" == "1" ]] || return 0; mkdir -p "${_gzmx_widget_log:h}" 2>/dev/null; print -r -- "$(date -u '+%Y-%m-%dT%H:%M:%SZ') widget $*" >> "$_gzmx_widget_log"; }
+  local _gzmx_widget_accept_fallthrough() { typeset -g _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL=""; zle .accept-line; }
   [[ -n "${BUFFER:-}" ]] || { zle .accept-line; return }
-  [[ "${GHOSTTY_ZMX_AUTO_ATTACH:-}" == "1" && "${TERM_PROGRAM:-}" == "ghostty" && -n "${ZMX_SESSION:-}" ]] || { _gzmx_widget_debug "fallthrough reason=not-managed buffer=$BUFFER"; zle .accept-line; return }
+  [[ "${GHOSTTY_ZMX_AUTO_ATTACH:-}" == "1" && "${TERM_PROGRAM:-}" == "ghostty" && -n "${ZMX_SESSION:-}" ]] || { _gzmx_widget_debug "fallthrough reason=not-managed buffer=$BUFFER"; _gzmx_widget_accept_fallthrough; return }
   # Bisection kill switch: disable the widget interception entirely.
-  [[ "${GHOSTTY_ZMX_DISABLE_WIDGET:-0}" != "1" ]] || { _gzmx_widget_debug "fallthrough reason=widget-disabled buffer=$BUFFER"; zle .accept-line; return }
+  [[ "${GHOSTTY_ZMX_DISABLE_WIDGET:-0}" != "1" ]] || { _gzmx_widget_debug "fallthrough reason=widget-disabled buffer=$BUFFER"; _gzmx_widget_accept_fallthrough; return }
 
 
   _gzmx_widget_debug "inspect buffer=$BUFFER"
   # Fail open on complex shell syntax. v0.2 intercepts only simple interactive ssh forms.
   if [[ "$BUFFER" == *[';|&<>`$()']* ]]; then
     _gzmx_widget_debug "fallthrough reason=complex-syntax buffer=$BUFFER"
-    zle .accept-line
+    _gzmx_widget_accept_fallthrough
     return
   fi
 
@@ -2171,7 +2172,7 @@ ghostty_zmx_accept_line() {
     start=3
     prefix=(tsh ssh)
   else
-    zle .accept-line
+    _gzmx_widget_accept_fallthrough
     return
   fi
 
@@ -2184,7 +2185,7 @@ ghostty_zmx_accept_line() {
     fi
     case "$token" in
       --)
-        zle .accept-line
+        _gzmx_widget_accept_fallthrough
         return
         ;;
       -t|-tt|--tty)
@@ -2199,7 +2200,7 @@ ghostty_zmx_accept_line() {
         continue
         ;;
       -*)
-        zle .accept-line
+        _gzmx_widget_accept_fallthrough
         return
         ;;
       *)
@@ -2210,12 +2211,12 @@ ghostty_zmx_accept_line() {
     esac
   done
 
-  [[ -n "$host_target" ]] || { zle .accept-line; return }
+  [[ -n "$host_target" ]] || { _gzmx_widget_accept_fallthrough; return }
   # Extra words after the host mean a one-shot remote command. Do not hijack.
-  (( host_index == ${#words} )) || { zle .accept-line; return }
+  (( host_index == ${#words} )) || { _gzmx_widget_accept_fallthrough; return }
 
   host_key="${host_target##*@}"
-  [[ -n "$host_key" ]] || { zle .accept-line; return }
+  [[ -n "$host_key" ]] || { _gzmx_widget_accept_fallthrough; return }
 
   # The widget intercepts the line instead of calling zle .accept-line, so zsh
   # would not add the typed ssh/tsh command to history. Explicitly push it so
@@ -2233,6 +2234,7 @@ ghostty_zmx_accept_line() {
   local _gzmx_widget_refresh_history
   _gzmx_widget_refresh_history() {
     if [[ -n "${HISTFILE:-}" ]]; then
+      fc -AI "$HISTFILE" 2>/dev/null || fc -W "$HISTFILE" 2>/dev/null || true
       fc -R "$HISTFILE" 2>/dev/null || true
     else
       fc -R 2>/dev/null || true
@@ -2435,19 +2437,11 @@ ghostty_zmx_up_line_or_handoff_history() {
   emulate -L zsh
   setopt local_options no_sh_word_split
   if [[ -n "${_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL:-}" && -z "${BUFFER:-}" ]]; then
-    local _gzmx_last_history=""
-    if [[ -n "${HISTFILE:-}" && -r "$HISTFILE" ]]; then
-      _gzmx_last_history="$(tail -n 1 "$HISTFILE" 2>/dev/null)"
-      [[ "$_gzmx_last_history" == ": "*";"* ]] && _gzmx_last_history="${_gzmx_last_history#*;}"
-    fi
-    if [[ -z "$_gzmx_last_history" || "$_gzmx_last_history" == "$_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL" ]]; then
-      BUFFER="$_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL"
-      CURSOR=${#BUFFER}
-      _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL=""
-      zle redisplay
-      return
-    fi
+    BUFFER="$_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL"
+    CURSOR=${#BUFFER}
     _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL=""
+    zle redisplay
+    return
   fi
 
   local _gzmx_previous="${_GHOSTTY_ZMX_PREVIOUS_UP_WIDGET:-up-line-or-history}"

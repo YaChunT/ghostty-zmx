@@ -21,22 +21,36 @@ zdot="$workdir/zdot"
 mkdir -p "$zdot"
 hf="$workdir/.zsh_history"
 
-# Two variants: BUGGY (print -s only) and FIXED (print -s + fc -R).
-# Both should pass after the fix is in place; the BUGGY variant is kept to
-# document the historical failure mode (it may pass on some zsh/option
-# combinations, which is why this is a defense-in-depth test).
-widget_body='print -s -- "$BUFFER"; fc -R "$HISTFILE"; BUFFER=""; zle reset-prompt'
-
 cat > "$zdot/.zshrc" <<EOF
 export HISTFILE='$hf'
 rm -f '$hf'
 export HISTSIZE=100 SAVEHIST=100
 setopt share_history hist_ignore_dups
 PS1="P> "
-gzmx_test_widget() { $widget_body }
+gzmx_test_widget() {
+  local original_buffer="\$BUFFER"
+  print -s -- "\$original_buffer"
+  fc -AI "\$HISTFILE" 2>/dev/null || fc -W "\$HISTFILE" 2>/dev/null || true
+  fc -R "\$HISTFILE" 2>/dev/null || true
+  typeset -g _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL="\$original_buffer"
+  BUFFER=""
+  zle reset-prompt
+}
+gzmx_test_up() {
+  if [[ -n "\${_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL:-}" && -z "\${BUFFER:-}" ]]; then
+    BUFFER="\$_GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL"
+    CURSOR=\${#BUFFER}
+    _GHOSTTY_ZMX_PENDING_HANDOFF_HISTORY_RECALL=""
+    zle redisplay
+    return
+  fi
+  zle .up-line-or-history
+}
 zle -N gzmx_test_widget
+zle -N gzmx_test_up
 bindkey "^M" gzmx_test_widget
 bindkey "^J" gzmx_test_widget
+bindkey "\e[A" gzmx_test_up
 EOF
 
 # Drive a pty: type the handoff + Enter, then Up-arrow, then dump BUFFER.
@@ -95,6 +109,13 @@ sys.exit(1)
 PY
 
 if (( $? == 0 )); then
+  _last_history="$(tail -n 1 "$hf" 2>/dev/null)"
+  [[ "$_last_history" == ": "*";"* ]] && _last_history="${_last_history#*;}"
+  [[ "$_last_history" == "tsh ssh pcad-dev" ]] || {
+    print -u2 "FAIL: handoff command was not persisted as latest history entry: $_last_history"
+    exit 1
+  }
+  print "  ok: handoff command persisted as latest history entry"
   print "all handoff-history tests passed"
   exit 0
 else
